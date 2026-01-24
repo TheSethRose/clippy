@@ -92,11 +92,15 @@ export const respondCommand = new Command('respond')
 
       if (!myAttendance) return false;
 
+      // Include events where response is None or NotResponded
+      const isPending = myAttendance.Status?.Response === 'None' ||
+                        myAttendance.Status?.Response === 'NotResponded';
+      if (!isPending) return false;
+
       // Optional attendance handling
-      const isOptional = (myAttendance as any).AttendeeType === 'Optional';
+      const isOptional = myAttendance.Type === 'Optional';
       if (options.onlyRequired && isOptional) return false;
 
-      // Show all attendee events by default; include status in list
       return true;
     });
 
