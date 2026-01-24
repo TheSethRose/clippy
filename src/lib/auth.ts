@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { homedir } from 'os';
 import { join } from 'path';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { validateSession } from './owa-client.js';
 
 export interface AuthResult {
@@ -15,6 +16,43 @@ export interface PlaywrightTokenResult {
   token?: string;
   graphToken?: string;
   error?: string;
+}
+
+interface CachedToken {
+  token: string;
+  graphToken?: string;
+  expiresAt: number;
+}
+
+const TOKEN_CACHE_FILE = join(homedir(), '.config', 'clippy', 'token-cache.json');
+const TOKEN_TTL = 55 * 60 * 1000; // 55 minutes (tokens typically expire in 1 hour)
+
+async function getCachedToken(): Promise<CachedToken | null> {
+  try {
+    const data = await readFile(TOKEN_CACHE_FILE, 'utf-8');
+    const cached = JSON.parse(data) as CachedToken;
+    if (cached.expiresAt > Date.now()) {
+      return cached;
+    }
+  } catch {
+    // No cache or invalid cache
+  }
+  return null;
+}
+
+async function setCachedToken(token: string, graphToken?: string): Promise<void> {
+  try {
+    const cacheDir = join(homedir(), '.config', 'clippy');
+    await mkdir(cacheDir, { recursive: true });
+    const cached: CachedToken = {
+      token,
+      graphToken,
+      expiresAt: Date.now() + TOKEN_TTL,
+    };
+    await writeFile(TOKEN_CACHE_FILE, JSON.stringify(cached), 'utf-8');
+  } catch {
+    // Ignore cache write errors
+  }
 }
 
 /**
@@ -53,8 +91,7 @@ async function tryExtractToken(
     const userDataDir = join(homedir(), '.config', 'clippy', 'browser-profile');
 
     // Ensure the directory exists
-    const fs = await import('fs/promises');
-    await fs.mkdir(userDataDir, { recursive: true });
+    await mkdir(userDataDir, { recursive: true });
 
     // Launch persistent context - session will be remembered
     context = await chromium.launchPersistentContext(userDataDir, {
@@ -165,12 +202,28 @@ export async function resolveAuth(options: {
     };
   }
 
-  // Priority 3: Interactive Playwright extraction
+  // Priority 3: Cached token (fast path - no browser needed)
+  const cached = await getCachedToken();
+  if (cached) {
+    const isValid = await validateSession(cached.token);
+    if (isValid) {
+      return {
+        success: true,
+        token: cached.token,
+        graphToken: cached.graphToken,
+      };
+    }
+    // Cache is stale, will re-extract below
+  }
+
+  // Priority 4: Interactive Playwright extraction
   if (interactive) {
     const playwrightResult = await extractTokenViaPlaywright();
     if (playwrightResult.success && playwrightResult.token) {
       const isValid = await validateSession(playwrightResult.token);
       if (isValid) {
+        // Cache the token for future use
+        await setCachedToken(playwrightResult.token, playwrightResult.graphToken);
         return {
           success: true,
           token: playwrightResult.token,
