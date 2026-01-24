@@ -21,32 +21,83 @@ function getStatusIcon(status: string): string {
   }
 }
 
-function getDateRange(day: string): { start: Date; end: Date } {
-  const now = new Date();
-  let targetDate: Date;
+function parseDay(day: string, baseDate: Date = new Date()): Date {
+  const now = new Date(baseDate);
 
   switch (day.toLowerCase()) {
     case 'today':
-      targetDate = now;
-      break;
+      return now;
     case 'tomorrow':
-      targetDate = new Date(now);
-      targetDate.setDate(targetDate.getDate() + 1);
-      break;
+      now.setDate(now.getDate() + 1);
+      return now;
+    case 'monday':
+    case 'tuesday':
+    case 'wednesday':
+    case 'thursday':
+    case 'friday':
+    case 'saturday':
+    case 'sunday': {
+      const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const targetDay = days.indexOf(day.toLowerCase());
+      const currentDay = now.getDay();
+      let diff = targetDay - currentDay;
+      if (diff <= 0) diff += 7; // Go to next occurrence
+      now.setDate(now.getDate() + diff);
+      return now;
+    }
     default:
-      targetDate = new Date(day);
-      if (isNaN(targetDate.getTime())) {
-        targetDate = now;
-      }
+      const parsed = new Date(day);
+      return isNaN(parsed.getTime()) ? now : parsed;
+  }
+}
+
+function getDateRange(startDay: string, endDay?: string): { start: Date; end: Date; label: string } {
+  const now = new Date();
+
+  // Handle week keywords
+  switch (startDay.toLowerCase()) {
+    case 'week':
+    case 'thisweek': {
+      const start = new Date(now);
+      const dayOfWeek = start.getDay();
+      const diff = dayOfWeek === 0 ? 1 : 1 - dayOfWeek + 7; // Next Monday
+      start.setDate(start.getDate() + (dayOfWeek === 0 ? 1 : 8 - dayOfWeek));
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 4); // Friday
+      end.setHours(23, 59, 59, 999);
+      return { start, end, label: 'This Week (Mon-Fri)' };
+    }
+    case 'nextweek': {
+      const start = new Date(now);
+      const dayOfWeek = start.getDay();
+      const daysUntilNextMonday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
+      start.setDate(start.getDate() + daysUntilNextMonday);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 4); // Friday
+      end.setHours(23, 59, 59, 999);
+      return { start, end, label: 'Next Week (Mon-Fri)' };
+    }
   }
 
-  const start = new Date(targetDate);
-  start.setHours(0, 0, 0, 0);
+  const startDate = parseDay(startDay);
+  startDate.setHours(0, 0, 0, 0);
 
-  const end = new Date(targetDate);
-  end.setHours(23, 59, 59, 999);
+  if (endDay) {
+    const endDate = parseDay(endDay, startDate);
+    endDate.setHours(23, 59, 59, 999);
+    return {
+      start: startDate,
+      end: endDate,
+      label: `${formatDate(startDate.toISOString())} - ${formatDate(endDate.toISOString())}`
+    };
+  }
 
-  return { start, end };
+  const endDate = new Date(startDate);
+  endDate.setHours(23, 59, 59, 999);
+
+  return { start: startDate, end: endDate, label: formatDate(startDate.toISOString()) };
 }
 
 function findFreeSlots(
@@ -98,15 +149,15 @@ function findFreeSlots(
 
 export const freebusyCommand = new Command('freebusy')
   .description('Check free/busy status for yourself or other users')
-  .argument('[day]', 'Day to check (today, tomorrow, or YYYY-MM-DD)', 'today')
-  .argument('[emails...]', 'Email addresses to check (defaults to self)')
+  .argument('[start]', 'Start day: today, tomorrow, monday-sunday, week, nextweek, or YYYY-MM-DD', 'today')
+  .argument('[endOrEmails...]', 'End day for range OR email addresses to check')
   .option('--start <hour>', 'Work day start hour (0-23)', '9')
   .option('--end <hour>', 'Work day end hour (0-23)', '17')
   .option('--free', 'Show free slots instead of busy')
   .option('--json', 'Output as JSON')
   .option('--token <token>', 'Use a specific token')
   .option('-i, --interactive', 'Open browser to extract token automatically')
-  .action(async (day: string, emails: string[], options: {
+  .action(async (startDay: string, endOrEmails: string[], options: {
     start: string;
     end: string;
     free?: boolean;
@@ -129,7 +180,28 @@ export const freebusyCommand = new Command('freebusy')
       process.exit(1);
     }
 
-    const { start, end } = getDateRange(day);
+    // Parse arguments: figure out which are dates vs emails
+    const dateKeywords = ['today', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'week', 'thisweek', 'nextweek'];
+    const isDateArg = (arg: string) => {
+      if (dateKeywords.includes(arg.toLowerCase())) return true;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) return true;
+      return false;
+    };
+
+    let endDay: string | undefined;
+    let emails: string[] = [];
+
+    for (const arg of endOrEmails) {
+      if (arg.includes('@')) {
+        emails.push(arg);
+      } else if (isDateArg(arg) && !endDay) {
+        endDay = arg;
+      } else {
+        emails.push(arg); // Assume it's an email if not a date
+      }
+    }
+
+    const { start, end, label } = getDateRange(startDay, endDay);
     const workStart = parseInt(options.start);
     const workEnd = parseInt(options.end);
 
@@ -170,8 +242,7 @@ export const freebusyCommand = new Command('freebusy')
         return;
       }
 
-      const dateLabel = formatDate(start.toISOString());
-      console.log(`\n📊 Availability for ${dateLabel}`);
+      console.log(`\n📊 Availability for ${label}`);
       console.log('─'.repeat(50));
 
       for (const schedule of result.data) {
@@ -233,8 +304,7 @@ export const freebusyCommand = new Command('freebusy')
       return;
     }
 
-    const dateLabel = formatDate(start.toISOString());
-    console.log(`\n📊 ${options.free ? 'Free times' : 'Busy times'} for ${dateLabel}`);
+    console.log(`\n📊 ${options.free ? 'Free times' : 'Busy times'} for ${label}`);
     console.log('─'.repeat(40));
 
     if (options.free) {
