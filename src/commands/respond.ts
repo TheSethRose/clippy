@@ -94,15 +94,16 @@ export const respondCommand = new Command('respond')
         a => a.EmailAddress?.Address?.toLowerCase() === userEmail
       );
 
-      if (!myAttendance) return false;
+      // Some events don't include attendee records; fall back to event-level ResponseStatus if present
+      const eventResponse = (event as any).ResponseStatus?.Response as string | undefined;
+      const response = myAttendance?.Status?.Response || eventResponse || 'None';
 
       // Include events where response is None or NotResponded
-      const isPending = myAttendance.Status?.Response === 'None' ||
-                        myAttendance.Status?.Response === 'NotResponded';
+      const isPending = response === 'None' || response === 'NotResponded';
       if (!isPending) return false;
 
-      // Optional attendance handling
-      const isOptional = myAttendance.Type === 'Optional';
+      // Optional attendance handling (only if we can detect it)
+      const isOptional = myAttendance?.Type === 'Optional';
       if (options.onlyRequired && isOptional) return false;
 
       return true;
@@ -144,7 +145,8 @@ export const respondCommand = new Command('respond')
         const myAttendance = event.Attendees?.find(
           a => a.EmailAddress?.Address?.toLowerCase() === userEmail
         );
-        const response = myAttendance?.Status?.Response || 'None';
+        const eventResponse = (event as any).ResponseStatus?.Response as string | undefined;
+        const response = myAttendance?.Status?.Response || eventResponse || 'None';
         const icon = getResponseIcon(response);
 
         console.log(`\n  [${i + 1}] ${icon} ${event.Subject}`);
