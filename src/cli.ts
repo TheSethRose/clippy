@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { loginCommand } from './commands/login.js';
 import { whoamiCommand } from './commands/whoami.js';
 import { calendarCommand } from './commands/calendar.js';
-import { freebusyCommand } from './commands/freebusy.js';
+import { findtimeCommand } from './commands/findtime.js';
 
 const program = new Command();
 
@@ -15,6 +15,6 @@ program
 program.addCommand(loginCommand);
 program.addCommand(whoamiCommand);
 program.addCommand(calendarCommand);
-program.addCommand(freebusyCommand);
+program.addCommand(findtimeCommand);
 
 program.parse();

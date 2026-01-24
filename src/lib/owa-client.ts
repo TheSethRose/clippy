@@ -322,7 +322,8 @@ export async function getScheduleViaOutlook(
   token: string,
   emails: string[],
   startDateTime: string,
-  endDateTime: string
+  endDateTime: string,
+  durationMinutes: number = 30
 ): Promise<OwaResponse<ScheduleInfo[]>> {
   // Try using FindMeetingTimes which can access other users' availability
   const url = 'https://outlook.office.com/api/v2.0/me/FindMeetingTimes';
@@ -347,7 +348,7 @@ export async function getScheduleViaOutlook(
             End: { DateTime: endDateTime, TimeZone: 'W. Europe Standard Time' },
           }],
         },
-        MeetingDuration: 'PT30M',
+        MeetingDuration: `PT${durationMinutes}M`,
         ReturnSuggestionReasons: true,
         MinimumAttendeePercentage: 100,
       }),
