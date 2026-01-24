@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import { resolveAuth } from '../lib/auth.js';
-import { getEmails, getEmail } from '../lib/owa-client.js';
+import { getEmails, getEmail, getAttachments, getAttachment } from '../lib/owa-client.js';
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
@@ -35,6 +37,8 @@ export const mailCommand = new Command('mail')
   .option('--flagged', 'Show only flagged emails')
   .option('-s, --search <query>', 'Search emails (subject, body, sender)')
   .option('-r, --read <index>', 'Read email at index (1-based)')
+  .option('-d, --download <index>', 'Download attachments from email at index')
+  .option('-o, --output <dir>', 'Output directory for attachments', '.')
   .option('--json', 'Output as JSON')
   .option('--token <token>', 'Use a specific token')
   .option('-i, --interactive', 'Open browser to extract token automatically')
@@ -45,6 +49,8 @@ export const mailCommand = new Command('mail')
     flagged?: boolean;
     search?: string;
     read?: string;
+    download?: string;
+    output: string;
     json?: boolean;
     token?: string;
     interactive?: boolean;
@@ -156,12 +162,76 @@ export const mailCommand = new Command('mail')
       }
 
       if (email.HasAttachments) {
-        console.log('Attachments: Yes');
+        const attachmentsResult = await getAttachments(authResult.token!, email.Id);
+        if (attachmentsResult.ok && attachmentsResult.data) {
+          const atts = attachmentsResult.data.value.filter(a => !a.IsInline);
+          if (atts.length > 0) {
+            console.log('Attachments:');
+            for (const att of atts) {
+              const sizeKB = Math.round(att.Size / 1024);
+              console.log(`  - ${att.Name} (${sizeKB} KB)`);
+            }
+          }
+        }
       }
 
       console.log('\u2500'.repeat(60) + '\n');
       console.log(email.Body?.Content || email.BodyPreview || '(no content)');
       console.log('\n' + '\u2500'.repeat(60) + '\n');
+      return;
+    }
+
+    // Handle downloading attachments
+    if (options.download) {
+      const idx = parseInt(options.download) - 1;
+      if (isNaN(idx) || idx < 0 || idx >= emails.length) {
+        console.error(`Invalid email number: ${options.download}`);
+        console.error(`Valid range: 1-${emails.length}`);
+        process.exit(1);
+      }
+
+      const emailSummary = emails[idx];
+
+      if (!emailSummary.HasAttachments) {
+        console.log('This email has no attachments.');
+        return;
+      }
+
+      const attachmentsResult = await getAttachments(authResult.token!, emailSummary.Id);
+      if (!attachmentsResult.ok || !attachmentsResult.data) {
+        console.error(`Error: ${attachmentsResult.error?.message || 'Failed to fetch attachments'}`);
+        process.exit(1);
+      }
+
+      const attachments = attachmentsResult.data.value.filter(a => !a.IsInline);
+
+      if (attachments.length === 0) {
+        console.log('This email has no downloadable attachments.');
+        return;
+      }
+
+      // Ensure output directory exists
+      await mkdir(options.output, { recursive: true });
+
+      console.log(`\nDownloading ${attachments.length} attachment(s) to ${options.output}/\n`);
+
+      for (const att of attachments) {
+        // Get full attachment with content
+        const fullAtt = await getAttachment(authResult.token!, emailSummary.Id, att.Id);
+        if (!fullAtt.ok || !fullAtt.data || !fullAtt.data.ContentBytes) {
+          console.error(`  Failed to download: ${att.Name}`);
+          continue;
+        }
+
+        const filePath = join(options.output, att.Name);
+        const content = Buffer.from(fullAtt.data.ContentBytes, 'base64');
+        await writeFile(filePath, content);
+
+        const sizeKB = Math.round(content.length / 1024);
+        console.log(`  \u2713 ${att.Name} (${sizeKB} KB)`);
+      }
+
+      console.log('\nDone.\n');
       return;
     }
 

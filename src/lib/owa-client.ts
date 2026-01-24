@@ -1055,6 +1055,108 @@ export async function getEmail(
   }
 }
 
+// Attachment types
+export interface Attachment {
+  Id: string;
+  Name: string;
+  ContentType: string;
+  Size: number;
+  IsInline: boolean;
+  ContentId?: string;
+  ContentBytes?: string;  // Base64 encoded content
+}
+
+export interface AttachmentListResponse {
+  value: Attachment[];
+}
+
+/**
+ * Get list of attachments for an email.
+ */
+export async function getAttachments(
+  token: string,
+  messageId: string
+): Promise<OwaResponse<AttachmentListResponse>> {
+  const url = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(messageId)}/attachments`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error: {
+          code: `HTTP_${response.status}`,
+          message: response.statusText,
+        },
+      };
+    }
+
+    const data = (await response.json()) as AttachmentListResponse;
+    return { ok: true, status: response.status, data };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: {
+        code: 'NETWORK_ERROR',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      },
+    };
+  }
+}
+
+/**
+ * Get a single attachment with content.
+ */
+export async function getAttachment(
+  token: string,
+  messageId: string,
+  attachmentId: string
+): Promise<OwaResponse<Attachment>> {
+  const url = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error: {
+          code: `HTTP_${response.status}`,
+          message: response.statusText,
+        },
+      };
+    }
+
+    const data = (await response.json()) as Attachment;
+    return { ok: true, status: response.status, data };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: {
+        code: 'NETWORK_ERROR',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      },
+    };
+  }
+}
+
 export type ResponseType = 'accept' | 'decline' | 'tentative';
 
 export interface RespondToEventOptions {
