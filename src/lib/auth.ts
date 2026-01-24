@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { setTimeout as sleep } from 'timers/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { readFile, writeFile, mkdir, unlink, open } from 'fs/promises';
@@ -114,7 +115,7 @@ async function getCachedToken(): Promise<{ cached: CachedToken; needsRefresh: bo
   return null;
 }
 
-async function setCachedToken(token: string, graphToken?: string): Promise<void> {
+export async function setCachedToken(token: string, graphToken?: string): Promise<void> {
   try {
     const cacheDir = join(homedir(), '.config', 'clippy');
     await mkdir(cacheDir, { recursive: true });
@@ -260,6 +261,70 @@ async function tryExtractToken(
       success: false,
       error: err instanceof Error ? err.message : 'Unknown error during token extraction',
     };
+  }
+}
+
+export async function startKeepaliveSession(options: { intervalMinutes: number; headless?: boolean }): Promise<void> {
+  const { intervalMinutes, headless = false } = options;
+
+  // Use a dedicated profile directory for Clippy (persists login session)
+  const userDataDir = join(homedir(), '.config', 'clippy', 'browser-profile');
+  await mkdir(userDataDir, { recursive: true });
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    headless,
+    channel: 'chrome',
+    args: ['--disable-blink-features=AutomationControlled'],
+  });
+
+  const page = context.pages()[0] || await context.newPage();
+
+  let lastToken: string | null = null;
+  let lastGraphToken: string | null = null;
+
+  page.on('request', request => {
+    const url = request.url();
+    const headers = request.headers();
+    const authHeader = headers['authorization'];
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.replace('Bearer ', '');
+
+      if (url.includes('outlook.office.com')) {
+        lastToken = token;
+      }
+      if (url.includes('graph.microsoft.com')) {
+        lastGraphToken = token;
+      }
+    }
+  });
+
+  console.log(`Opening Outlook session (headless=${headless ? 'true' : 'false'})...`);
+  await page.goto('https://outlook.office.com/mail/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+  console.log(`Keepalive active. Refreshing every ${intervalMinutes} minutes.`);
+
+  // Main keepalive loop
+  while (true) {
+    // Give some time for requests to fire and tokens to be captured
+    await sleep(2000);
+
+    if (lastToken) {
+      await setCachedToken(lastToken, lastGraphToken || undefined);
+    }
+
+    await sleep(intervalMinutes * 60 * 1000);
+
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+    } catch {
+      // If reload fails, try to navigate again
+      try {
+        await page.goto('https://outlook.office.com/mail/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      } catch {
+        // ignore, will retry on next loop
+      }
+    }
   }
 }
 
