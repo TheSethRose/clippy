@@ -1538,6 +1538,8 @@ export async function sendEmail(
 
 /**
  * Reply to an email.
+ * For plain text replies, uses Comment field (Outlook handles quoting).
+ * For HTML replies, creates a draft first to preserve the quoted original.
  */
 export async function replyToEmail(
   token: string,
@@ -1546,46 +1548,157 @@ export async function replyToEmail(
   replyAll: boolean = false,
   isHtml: boolean = false
 ): Promise<OwaResponse<void>> {
-  const action = replyAll ? 'replyall' : 'reply';
-  const url = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(messageId)}/${action}`;
+  // For plain text, use the simple Comment approach
+  if (!isHtml) {
+    const action = replyAll ? 'replyall' : 'reply';
+    const url = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(messageId)}/${action}`;
 
-  // Build request body - use Message.Body for HTML content
-  const requestBody: Record<string, unknown> = isHtml
-    ? {
-        Message: {
-          Body: {
-            ContentType: 'HTML',
-            Content: comment,
-          },
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': USER_AGENT,
+          Accept: 'application/json',
         },
+        body: JSON.stringify({ Comment: comment }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          ok: false,
+          status: response.status,
+          error: {
+            code: `HTTP_${response.status}`,
+            message: errorText || response.statusText,
+          },
+        };
       }
-    : { Comment: comment };
+
+      return { ok: true, status: response.status };
+    } catch (err) {
+      return {
+        ok: false,
+        status: 0,
+        error: {
+          code: 'NETWORK_ERROR',
+          message: err instanceof Error ? err.message : 'Unknown error',
+        },
+      };
+    }
+  }
+
+  // For HTML replies, create a draft first to get the quoted original
+  const createAction = replyAll ? 'createreplyall' : 'createreply';
+  const createUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(messageId)}/${createAction}`;
 
   try {
-    const response = await fetch(url, {
+    // Step 1: Create reply draft (gets us the quoted original)
+    const createResponse = await fetch(createUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
         'User-Agent': USER_AGENT,
         Accept: 'application/json',
+        Prefer: 'outlook.body-content-type="html"',
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({}),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
+    if (!createResponse.ok) {
+      const errorText = await createResponse.text();
       return {
         ok: false,
-        status: response.status,
+        status: createResponse.status,
         error: {
-          code: `HTTP_${response.status}`,
-          message: errorText || response.statusText,
+          code: `HTTP_${createResponse.status}`,
+          message: errorText || createResponse.statusText,
         },
       };
     }
 
-    return { ok: true, status: response.status };
+    const draft = await createResponse.json() as { Id: string; Body?: { Content?: string } };
+    const draftId = draft.Id;
+    const quotedOriginal = draft.Body?.Content || '';
+
+    // Step 2: Update draft with our HTML prepended to the quoted content
+    const updateUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(draftId)}`;
+
+    // Extract just the content if the comment is a full HTML document
+    let replyContent = comment;
+    const bodyMatch = comment.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    if (bodyMatch) {
+      replyContent = bodyMatch[1].trim();
+    }
+
+    // Combine our HTML with the quoted original
+    // The quoted original already has proper HTML structure, so we insert our content
+    let combinedBody: string;
+    if (quotedOriginal.includes('<body')) {
+      // Insert our content after <body...> tag
+      combinedBody = quotedOriginal.replace(
+        /(<body[^>]*>)/i,
+        `$1<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.5;">${replyContent}</div><br><hr style="border: none; border-top: 1px solid #ccc; margin: 20px 0;">`
+      );
+    } else {
+      // No body tag, just prepend
+      combinedBody = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.5;">${replyContent}</div><br><hr style="border: none; border-top: 1px solid #ccc; margin: 20px 0;">${quotedOriginal}`;
+    }
+
+    const updateResponse = await fetch(updateUrl, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        Body: {
+          ContentType: 'HTML',
+          Content: combinedBody,
+        },
+      }),
+    });
+
+    if (!updateResponse.ok) {
+      const errorText = await updateResponse.text();
+      return {
+        ok: false,
+        status: updateResponse.status,
+        error: {
+          code: `HTTP_${updateResponse.status}`,
+          message: errorText || updateResponse.statusText,
+        },
+      };
+    }
+
+    // Step 3: Send the draft
+    const sendUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(draftId)}/send`;
+    const sendResponse = await fetch(sendUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': USER_AGENT,
+      },
+    });
+
+    if (!sendResponse.ok) {
+      const errorText = await sendResponse.text();
+      return {
+        ok: false,
+        status: sendResponse.status,
+        error: {
+          code: `HTTP_${sendResponse.status}`,
+          message: errorText || sendResponse.statusText,
+        },
+      };
+    }
+
+    return { ok: true, status: sendResponse.status };
   } catch (err) {
     return {
       ok: false,

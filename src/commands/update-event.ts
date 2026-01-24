@@ -290,7 +290,7 @@ export const updateEventCommand = new Command('update-event')
 
     // Handle attendees (merge existing with new)
     if (options.addAttendee.length > 0 || roomEmail) {
-      const existingAttendees = (targetEvent.Attendees || []).map(a => ({
+      const existingAttendees: Array<{ email: string; name?: string; type: 'Required' | 'Optional' | 'Resource' }> = (targetEvent.Attendees || []).map(a => ({
         email: a.EmailAddress?.Address || '',
         name: a.EmailAddress?.Name,
         type: a.Type as 'Required' | 'Optional' | 'Resource',

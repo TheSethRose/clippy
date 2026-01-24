@@ -167,7 +167,7 @@ export const createEventCommand = new Command('create-event')
     const end = parseTimeToDate(endTime, baseDate);
 
     // Parse attendees
-    const attendees = options.attendees
+    const attendees: Array<{ email: string; name?: string; type?: 'Required' | 'Optional' | 'Resource' }> = options.attendees
       ? options.attendees.split(',').map(e => ({ email: e.trim() }))
       : [];
 
