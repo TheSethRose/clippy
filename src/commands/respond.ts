@@ -80,7 +80,7 @@ export const respondCommand = new Command('respond')
       process.exit(1);
     }
 
-    // Filter to events where user hasn't responded (or is not the organizer)
+    // Filter to events where user is an attendee (and not organizer)
     const pendingEvents = result.data.filter(event => {
       if (event.IsCancelled) return false;
       if (event.IsOrganizer) return false;
@@ -92,16 +92,11 @@ export const respondCommand = new Command('respond')
 
       if (!myAttendance) return false;
 
-      // Include events where response is None or NotResponded
-      const isPending = myAttendance.Status?.Response === 'None' ||
-                        myAttendance.Status?.Response === 'NotResponded';
-
-      if (!isPending) return false;
-
       // Optional attendance handling
       const isOptional = (myAttendance as any).AttendeeType === 'Optional';
       if (options.onlyRequired && isOptional) return false;
 
+      // Show all attendee events by default; include status in list
       return true;
     });
 
@@ -138,7 +133,13 @@ export const respondCommand = new Command('respond')
         const startTime = formatTime(event.Start.DateTime);
         const endTime = formatTime(event.End.DateTime);
 
-        console.log(`\n  [${i + 1}] ${event.Subject}`);
+        const myAttendance = event.Attendees?.find(
+          a => a.EmailAddress?.Address?.toLowerCase() === userEmail
+        );
+        const response = myAttendance?.Status?.Response || 'None';
+        const icon = getResponseIcon(response);
+
+        console.log(`\n  [${i + 1}] ${icon} ${event.Subject}`);
         console.log(`      ${dateStr} ${startTime} - ${endTime}`);
         if (event.Location?.DisplayName) {
           console.log(`      Location: ${event.Location.DisplayName}`);
