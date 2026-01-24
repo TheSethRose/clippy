@@ -267,8 +267,8 @@ async function tryExtractToken(
 export async function startKeepaliveSession(options: { intervalMinutes: number; headless?: boolean }): Promise<void> {
   const { intervalMinutes, headless = false } = options;
 
-  // Use a dedicated profile directory for Clippy (persists login session)
-  const userDataDir = join(homedir(), '.config', 'clippy', 'browser-profile');
+  // Use a dedicated profile directory for keepalive (isolated from other sessions)
+  const userDataDir = join(homedir(), '.config', 'clippy', 'keepalive-profile');
   await mkdir(userDataDir, { recursive: true });
 
   const context = await chromium.launchPersistentContext(userDataDir, {
