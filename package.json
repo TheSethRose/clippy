@@ -1,0 +1,22 @@
+{
+  "name": "clippy",
+  "version": "0.1.0",
+  "description": "CLI for Microsoft 365/OWA using cookie-based authentication",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "clippy": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "playwright": "^1.40.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}

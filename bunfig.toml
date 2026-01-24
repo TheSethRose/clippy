@@ -1,0 +1,3 @@
+[install]
+# Prefer offline packages when available
+prefer-offline = true
