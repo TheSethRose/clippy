@@ -143,15 +143,24 @@ export const refreshCommand = new Command('refresh')
         return;
       }
 
-      const forceRefresh = options.force || options.silent;
+      // --silent should only control logging, not behavior.
+      const forceRefresh = options.force;
 
-      // Skip refresh if token is still good (>10 min remaining) and not forced
-      if (!forceRefresh && expiresIn > 10) {
+      // Even if the JWT says it's still valid, Microsoft can invalidate sessions early.
+      // So before we decide to skip refresh, we validate against OWA.
+      const stillAccepted = await validateSession(cached.token);
+
+      // Skip refresh only if token is still good (>10 min remaining), is accepted by OWA, and not forced
+      if (!forceRefresh && expiresIn > 10 && stillAccepted) {
         log(`Token still valid for ${expiresIn} minutes, skipping refresh`);
         return;
       }
 
-      log(`Token expires in ${expiresIn} minutes, refreshing...`);
+      if (!stillAccepted) {
+        log('Cached token rejected by OWA (session invalidated early), refreshing...');
+      } else {
+        log(`Token expires in ${expiresIn} minutes, refreshing...`);
+      }
     } catch {
       // No cached token
       if (options.status) {
@@ -162,8 +171,10 @@ export const refreshCommand = new Command('refresh')
     }
 
     // Refresh token (headless only - for unattended use)
-    const keepaliveProfile = join(homedir(), '.config', 'clippy', 'keepalive-profile');
-    const result = await extractTokenViaPlaywright({ headless: true, timeout: 30000, userDataDir: keepaliveProfile });
+    // Use the same persistent profile directory as interactive login so background refresh
+    // can reuse the already-authenticated session.
+    const browserProfile = join(homedir(), '.config', 'clippy', 'browser-profile');
+    const result = await extractTokenViaPlaywright({ headless: true, timeout: 30000, userDataDir: browserProfile, fallbackToVisible: false });
 
     if (!result.success || !result.token) {
       console.error(`Error: ${result.error || 'Failed to refresh token'}`);

@@ -140,9 +140,9 @@ export async function setCachedToken(token: string, graphToken?: string): Promis
  * Tries headless first, then falls back to visible browser if login is needed.
  */
 export async function extractTokenViaPlaywright(
-  options: { headless?: boolean; timeout?: number; userDataDir?: string } = {}
+  options: { headless?: boolean; timeout?: number; userDataDir?: string; fallbackToVisible?: boolean } = {}
 ): Promise<PlaywrightTokenResult> {
-  const { headless = true, timeout = 15000, userDataDir } = options;
+  const { headless = true, timeout = 15000, userDataDir, fallbackToVisible = true } = options;
 
   // Try headless first (fast path for already logged-in users)
   const result = await tryExtractToken(headless, timeout, userDataDir);
@@ -152,9 +152,9 @@ export async function extractTokenViaPlaywright(
   }
 
   // If headless failed and we haven't tried visible yet, retry with visible browser
-  if (headless) {
+  if (headless && fallbackToVisible) {
     console.log('Session not found. Opening browser for login...');
-    return tryExtractToken(false, 60000, userDataDir);  // Give more time for manual login
+    return tryExtractToken(false, 60000, userDataDir); // Give more time for manual login
   }
 
   return result;
