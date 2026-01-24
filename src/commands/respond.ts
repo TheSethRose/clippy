@@ -27,6 +27,7 @@ export const respondCommand = new Command('respond')
   .description('Respond to calendar invitations (accept/decline/tentative)')
   .argument('[action]', 'Action: list, accept, decline, tentative')
   .argument('[eventIndex]', 'Event index from the list (1-based)')
+  .option('--id <eventId>', 'Respond to a specific event by stable ID')
   .option('--comment <text>', 'Add a comment to your response')
   .option('--no-notify', 'Don\'t send response to organizer')
   .option('--include-optional', 'Include optional invitations (default)', true)
@@ -35,6 +36,7 @@ export const respondCommand = new Command('respond')
   .option('--token <token>', 'Use a specific token')
   .option('-i, --interactive', 'Open browser to extract token automatically')
   .action(async (action: string | undefined, eventIndex: string | undefined, options: {
+    id?: string;
     comment?: string;
     notify: boolean;
     json?: boolean;
@@ -145,6 +147,7 @@ export const respondCommand = new Command('respond')
 
         console.log(`\n  [${i + 1}] ${icon} ${event.Subject}`);
         console.log(`      ${dateStr} ${startTime} - ${endTime}`);
+        console.log(`      ID: ${event.Id}`);
         if (event.Location?.DisplayName) {
           console.log(`      Location: ${event.Location.DisplayName}`);
         }
@@ -159,6 +162,9 @@ export const respondCommand = new Command('respond')
       console.log('  clippy respond accept <number>');
       console.log('  clippy respond decline <number>');
       console.log('  clippy respond tentative <number>');
+      console.log('  clippy respond accept --id <eventId>');
+      console.log('  clippy respond decline --id <eventId>');
+      console.log('  clippy respond tentative --id <eventId>');
       console.log('');
       return;
     }
@@ -170,20 +176,29 @@ export const respondCommand = new Command('respond')
       process.exit(1);
     }
 
-    if (!eventIndex) {
-      console.error('Please specify the event number to respond to.');
-      console.error('Run `clippy respond list` to see pending invitations.');
-      process.exit(1);
-    }
+    let targetEvent;
+    if (options.id) {
+      targetEvent = pendingEvents.find(e => e.Id === options.id);
+      if (!targetEvent) {
+        console.error(`Invalid event id: ${options.id}`);
+        process.exit(1);
+      }
+    } else {
+      if (!eventIndex) {
+        console.error('Please specify the event number to respond to.');
+        console.error('Run `clippy respond list` to see pending invitations.');
+        process.exit(1);
+      }
 
-    const idx = parseInt(eventIndex) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= pendingEvents.length) {
-      console.error(`Invalid event number: ${eventIndex}`);
-      console.error(`Valid range: 1-${pendingEvents.length}`);
-      process.exit(1);
-    }
+      const idx = parseInt(eventIndex) - 1;
+      if (isNaN(idx) || idx < 0 || idx >= pendingEvents.length) {
+        console.error(`Invalid event number: ${eventIndex}`);
+        console.error(`Valid range: 1-${pendingEvents.length}`);
+        process.exit(1);
+      }
 
-    const targetEvent = pendingEvents[idx];
+      targetEvent = pendingEvents[idx];
+    }
 
     console.log(`\nResponding to: ${targetEvent.Subject}`);
     console.log(`  ${formatDate(targetEvent.Start.DateTime)} ${formatTime(targetEvent.Start.DateTime)} - ${formatTime(targetEvent.End.DateTime)}`);
