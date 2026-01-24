@@ -143,8 +143,10 @@ export const refreshCommand = new Command('refresh')
         return;
       }
 
+      const forceRefresh = options.force || options.silent;
+
       // Skip refresh if token is still good (>10 min remaining) and not forced
-      if (!options.force && expiresIn > 10) {
+      if (!forceRefresh && expiresIn > 10) {
         log(`Token still valid for ${expiresIn} minutes, skipping refresh`);
         return;
       }
