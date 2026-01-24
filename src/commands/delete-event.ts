@@ -42,6 +42,7 @@ export const deleteEventCommand = new Command('delete-event')
   .option('--token <token>', 'Use a specific token')
   .option('-i, --interactive', 'Open browser to extract token automatically')
   .action(async (eventIndex: string | undefined, options: {
+    id?: string;
     day: string;
     search?: string;
     message?: string;

@@ -26,7 +26,7 @@ function getResponseIcon(response: string): string {
 export const respondCommand = new Command('respond')
   .description('Respond to calendar invitations (accept/decline/tentative)')
   .argument('[action]', 'Action: list, accept, decline, tentative')
-  .argument('[eventIndex]', 'Event index from the list (1-based)')
+  .argument('[eventIndex]', 'Event index from the list (deprecated; use --id)')
   .option('--id <eventId>', 'Respond to a specific event by stable ID')
   .option('--comment <text>', 'Add a comment to your response')
   .option('--no-notify', 'Don\'t send response to organizer')
@@ -39,6 +39,8 @@ export const respondCommand = new Command('respond')
     id?: string;
     comment?: string;
     notify: boolean;
+    includeOptional?: boolean;
+    onlyRequired?: boolean;
     json?: boolean;
     token?: string;
     interactive?: boolean;

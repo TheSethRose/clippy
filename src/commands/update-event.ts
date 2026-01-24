@@ -80,6 +80,7 @@ export const updateEventCommand = new Command('update-event')
   .option('--token <token>', 'Use a specific token')
   .option('-i, --interactive', 'Open browser to extract token automatically')
   .action(async (eventIndex: string | undefined, options: {
+    id?: string;
     day: string;
     title?: string;
     description?: string;

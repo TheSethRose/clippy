@@ -255,7 +255,7 @@ export const mailCommand = new Command('mail')
 
       for (const att of attachments) {
         // Get full attachment with content
-        const fullAtt = await getAttachment(authResult.token!, emailSummary.Id, att.Id);
+        const fullAtt = await getAttachment(authResult.token!, emailSummary.data.Id, att.Id);
         if (!fullAtt.ok || !fullAtt.data || !fullAtt.data.ContentBytes) {
           console.error(`  Failed to download: ${att.Name}`);
           continue;
