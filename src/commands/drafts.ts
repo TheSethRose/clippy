@@ -315,6 +315,7 @@ export const draftsCommand = new Command('drafts')
   .option('--body <text>', 'Body for create/edit')
   .option('--attach <files>', 'Attach file(s), comma-separated paths')
   .option('--markdown', 'Parse body as markdown')
+  .option('--html', 'Treat body as HTML')
   .option('--json', 'Output as JSON')
   .option('--token <token>', 'Use a specific token')
   .option('-i, --interactive', 'Open browser to extract token automatically')
@@ -331,6 +332,7 @@ export const draftsCommand = new Command('drafts')
     body?: string;
     attach?: string;
     markdown?: boolean;
+    html?: boolean;
     json?: boolean;
     token?: string;
     interactive?: boolean;
@@ -378,7 +380,15 @@ export const draftsCommand = new Command('drafts')
       let body = options.body;
       if (body) body = body.replace(/\\n/g, '\n');
       let bodyType: 'Text' | 'HTML' = 'Text';
-      if (options.markdown && body) {
+      if (options.html && body) {
+        const escaped = body
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\n/g, '<br>');
+        body = body.match(/<\w+[^>]*>/) ? body : escaped;
+        bodyType = 'HTML';
+      } else if (options.markdown && body) {
         body = markdownToHtml(body);
         bodyType = 'HTML';
       }
@@ -473,7 +483,15 @@ export const draftsCommand = new Command('drafts')
       let body = options.body;
       if (body) body = body.replace(/\\n/g, '\n');
       let bodyType: 'Text' | 'HTML' = 'Text';
-      if (options.markdown && body) {
+      if (options.html && body) {
+        const escaped = body
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\n/g, '<br>');
+        body = body.match(/<\w+[^>]*>/) ? body : escaped;
+        bodyType = 'HTML';
+      } else if (options.markdown && body) {
         body = markdownToHtml(body);
         bodyType = 'HTML';
       }

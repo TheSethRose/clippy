@@ -1764,6 +1764,19 @@ async function createReplyDraft(
     const draftId = draft.Id;
     const quotedOriginal = draft.Body?.Content || '';
 
+    // Sanitize any separator/MIME boundary artifacts (Outlook sometimes injects them in text replies)
+    const sanitizedOriginal = quotedOriginal
+      .replace(/<[^>]*>\s*_{5,}\s*<\/[^>]*>/gi, '')
+      .replace(/(?:&#95;|&lowbar;){5,}/gi, '')
+      .replace(/_{5,}/g, '')
+      .replace(/^\s*--[-A-Za-z0-9_]+\s*$/gm, '')
+      .replace(/^\s*Content-(Type|Transfer-Encoding):.*$/gmi, '')
+      .replace(/^\s*charset=.*$/gmi, '')
+      .replace(/^\s*Content-Id:.*$/gmi, '')
+      .replace(/^\s*Content-Description:.*$/gmi, '')
+      .replace(/^\s*Content-Disposition:.*$/gmi, '')
+      .replace(/\n{3,}/g, '\n\n');
+
     // Step 2: Update draft with our HTML prepended to the quoted content
     const updateUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(draftId)}`;
 
@@ -1787,25 +1800,21 @@ async function createReplyDraft(
     let combinedBody: string;
     const replyDiv = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.5; margin-bottom: 20px;">${replyContent}</div>`;
 
-    if (quotedOriginal.includes('________________________________')) {
-      // Outlook inserts a separator line before the quoted thread; remove it so reply stays on top
-      const cleaned = quotedOriginal.replace(/_{10,}\s*/m, '');
-      combinedBody = `${replyDiv}${cleaned}`;
-    } else if (quotedOriginal.includes('divRplyFwdMsg')) {
+    if (sanitizedOriginal.includes('divRplyFwdMsg')) {
       // Insert our content before the reply/forward message div
-      combinedBody = quotedOriginal.replace(
+      combinedBody = sanitizedOriginal.replace(
         /(<div[^>]*id=["']?divRplyFwdMsg["']?)/i,
         `${replyDiv}$1`
       );
-    } else if (quotedOriginal.includes('<body')) {
+    } else if (sanitizedOriginal.includes('<body')) {
       // Fallback: insert after <body> tag
-      combinedBody = quotedOriginal.replace(
+      combinedBody = sanitizedOriginal.replace(
         /(<body[^>]*>)/i,
         `$1${replyDiv}`
       );
     } else {
       // No body tag, just prepend
-      combinedBody = `${replyDiv}${quotedOriginal}`;
+      combinedBody = `${replyDiv}${sanitizedOriginal}`;
     }
 
     const updateResponse = await fetch(updateUrl, {
