@@ -942,6 +942,7 @@ export interface GetEmailsOptions {
   top?: number;
   skip?: number;
   filter?: string;
+  search?: string;
   select?: string[];
   orderBy?: string;
 }
@@ -958,6 +959,7 @@ export async function getEmails(
     top = 10,
     skip = 0,
     filter,
+    search,
     select = ['Id', 'Subject', 'BodyPreview', 'From', 'ReceivedDateTime', 'IsRead', 'HasAttachments', 'Importance', 'Flag'],
     orderBy = 'ReceivedDateTime desc',
   } = options;
@@ -966,8 +968,10 @@ export async function getEmails(
   params.set('$top', top.toString());
   if (skip > 0) params.set('$skip', skip.toString());
   if (filter) params.set('$filter', filter);
+  if (search) params.set('$search', `"${search}"`);
   params.set('$select', select.join(','));
-  params.set('$orderby', orderBy);
+  // Note: $orderby is ignored when $search is used (results are ranked by relevance)
+  if (!search) params.set('$orderby', orderBy);
 
   const url = `https://outlook.office.com/api/v2.0/me/mailfolders/${folder}/messages?${params}`;
 

@@ -33,6 +33,7 @@ export const mailCommand = new Command('mail')
   .option('-p, --page <number>', 'Page number (1-based)', '1')
   .option('--unread', 'Show only unread emails')
   .option('--flagged', 'Show only flagged emails')
+  .option('-s, --search <query>', 'Search emails (subject, body, sender)')
   .option('-r, --read <index>', 'Read email at index (1-based)')
   .option('--json', 'Output as JSON')
   .option('--token <token>', 'Use a specific token')
@@ -42,6 +43,7 @@ export const mailCommand = new Command('mail')
     page: string;
     unread?: boolean;
     flagged?: boolean;
+    search?: string;
     read?: string;
     json?: boolean;
     token?: string;
@@ -97,6 +99,7 @@ export const mailCommand = new Command('mail')
       top: limit,
       skip,
       filter: filters.length > 0 ? filters.join(' and ') : undefined,
+      search: options.search,
     });
 
     if (!result.ok || !result.data) {
@@ -186,7 +189,9 @@ export const mailCommand = new Command('mail')
     }
 
     const folderDisplay = folder.charAt(0).toUpperCase() + folder.slice(1);
-    console.log(`\n\ud83d\udcec ${folderDisplay}${page > 1 ? ` (page ${page})` : ''}:\n`);
+    const searchInfo = options.search ? ` - search: "${options.search}"` : '';
+    const pageInfo = page > 1 ? ` (page ${page})` : '';
+    console.log(`\n\ud83d\udcec ${folderDisplay}${searchInfo}${pageInfo}:\n`);
     console.log('\u2500'.repeat(70));
 
     if (emails.length === 0) {
@@ -219,6 +224,7 @@ export const mailCommand = new Command('mail')
     console.log(`  clippy mail -r <number>           # Read email`);
     console.log(`  clippy mail -p ${page + 1}                   # Next page`);
     console.log(`  clippy mail --unread              # Only unread`);
+    console.log(`  clippy mail -s "keyword"          # Search emails`);
     console.log(`  clippy mail sent                  # Sent folder`);
     console.log('');
   });
