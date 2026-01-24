@@ -13,6 +13,7 @@ import { refreshCommand } from './commands/refresh.js';
 import { mailCommand } from './commands/mail.js';
 import { foldersCommand } from './commands/folders.js';
 import { sendCommand } from './commands/send.js';
+import { draftsCommand } from './commands/drafts.js';
 
 const program = new Command();
 
@@ -34,5 +35,6 @@ program.addCommand(refreshCommand);
 program.addCommand(mailCommand);
 program.addCommand(foldersCommand);
 program.addCommand(sendCommand);
+program.addCommand(draftsCommand);
 
 program.parse();

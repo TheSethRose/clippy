@@ -469,6 +469,27 @@ export async function getFreeBusy(
   };
 }
 
+export interface RecurrencePattern {
+  Type: 'Daily' | 'Weekly' | 'AbsoluteMonthly' | 'RelativeMonthly' | 'AbsoluteYearly' | 'RelativeYearly';
+  Interval: number;  // How many days/weeks/months between occurrences
+  DaysOfWeek?: string[];  // For weekly: ['Monday', 'Wednesday', 'Friday']
+  DayOfMonth?: number;  // For monthly: 15 (15th of month)
+  Month?: number;  // For yearly: 1-12
+  Index?: 'First' | 'Second' | 'Third' | 'Fourth' | 'Last';  // For relative patterns
+}
+
+export interface RecurrenceRange {
+  Type: 'EndDate' | 'NoEnd' | 'Numbered';
+  StartDate: string;  // YYYY-MM-DD
+  EndDate?: string;  // For EndDate type
+  NumberOfOccurrences?: number;  // For Numbered type
+}
+
+export interface Recurrence {
+  Pattern: RecurrencePattern;
+  Range: RecurrenceRange;
+}
+
 export interface CreateEventOptions {
   token: string;
   subject: string;
@@ -478,6 +499,7 @@ export interface CreateEventOptions {
   location?: string;
   attendees?: Array<{ email: string; name?: string; type?: 'Required' | 'Optional' | 'Resource' }>;
   isOnlineMeeting?: boolean;
+  recurrence?: Recurrence;
 }
 
 export interface CreatedEvent {
@@ -495,7 +517,7 @@ export interface CreatedEvent {
 export async function createEvent(
   options: CreateEventOptions
 ): Promise<OwaResponse<CreatedEvent>> {
-  const { token, subject, start, end, body, location, attendees, isOnlineMeeting } = options;
+  const { token, subject, start, end, body, location, attendees, isOnlineMeeting, recurrence } = options;
   const url = 'https://outlook.office.com/api/v2.0/me/events';
 
   const eventBody: Record<string, unknown> = {
@@ -536,6 +558,10 @@ export async function createEvent(
   if (isOnlineMeeting) {
     eventBody.IsOnlineMeeting = true;
     eventBody.OnlineMeetingProvider = 'TeamsForBusiness';
+  }
+
+  if (recurrence) {
+    eventBody.Recurrence = recurrence;
   }
 
   try {
@@ -859,7 +885,7 @@ export async function searchRooms(
 }
 
 /**
- * Delete a calendar event.
+ * Delete a calendar event (without sending cancellation notices).
  */
 export async function deleteEvent(
   token: string,
@@ -874,6 +900,58 @@ export async function deleteEvent(
         Authorization: `Bearer ${token}`,
         'User-Agent': USER_AGENT,
       },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        ok: false,
+        status: response.status,
+        error: {
+          code: `HTTP_${response.status}`,
+          message: errorText || response.statusText,
+        },
+      };
+    }
+
+    return { ok: true, status: response.status };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: {
+        code: 'NETWORK_ERROR',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      },
+    };
+  }
+}
+
+/**
+ * Cancel a calendar event (sends cancellation notices to attendees).
+ * Use this when you're the organizer and want to notify attendees.
+ */
+export async function cancelEvent(
+  token: string,
+  eventId: string,
+  comment?: string
+): Promise<OwaResponse<void>> {
+  const url = `https://outlook.office.com/api/v2.0/me/events/${encodeURIComponent(eventId)}/cancel`;
+
+  try {
+    const body: Record<string, unknown> = {};
+    if (comment) {
+      body.Comment = comment;
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'User-Agent': USER_AGENT,
+      },
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -1460,8 +1538,14 @@ export async function deleteMailFolder(
   }
 }
 
+export interface EmailAttachment {
+  name: string;
+  contentType: string;
+  contentBytes: string;  // Base64 encoded
+}
+
 /**
- * Send a new email.
+ * Send a new email, optionally with attachments.
  */
 export async function sendEmail(
   token: string,
@@ -1472,10 +1556,9 @@ export async function sendEmail(
     subject: string;
     body: string;
     bodyType?: 'Text' | 'HTML';
+    attachments?: EmailAttachment[];
   }
 ): Promise<OwaResponse<void>> {
-  const url = 'https://outlook.office.com/api/v2.0/me/sendmail';
-
   const message: Record<string, unknown> = {
     Subject: options.subject,
     Body: {
@@ -1499,8 +1582,52 @@ export async function sendEmail(
     }));
   }
 
+  // If no attachments, use simple sendmail
+  if (!options.attachments || options.attachments.length === 0) {
+    const url = 'https://outlook.office.com/api/v2.0/me/sendmail';
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': USER_AGENT,
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ Message: message }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          ok: false,
+          status: response.status,
+          error: {
+            code: `HTTP_${response.status}`,
+            message: errorText || response.statusText,
+          },
+        };
+      }
+
+      return { ok: true, status: response.status };
+    } catch (err) {
+      return {
+        ok: false,
+        status: 0,
+        error: {
+          code: 'NETWORK_ERROR',
+          message: err instanceof Error ? err.message : 'Unknown error',
+        },
+      };
+    }
+  }
+
+  // With attachments, use draft workflow: create draft -> add attachments -> send
   try {
-    const response = await fetch(url, {
+    // Step 1: Create draft
+    const createUrl = 'https://outlook.office.com/api/v2.0/me/messages';
+    const createResponse = await fetch(createUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1508,22 +1635,79 @@ export async function sendEmail(
         'User-Agent': USER_AGENT,
         Accept: 'application/json',
       },
-      body: JSON.stringify({ Message: message }),
+      body: JSON.stringify(message),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
+    if (!createResponse.ok) {
+      const errorText = await createResponse.text();
       return {
         ok: false,
-        status: response.status,
+        status: createResponse.status,
         error: {
-          code: `HTTP_${response.status}`,
-          message: errorText || response.statusText,
+          code: `HTTP_${createResponse.status}`,
+          message: errorText || createResponse.statusText,
         },
       };
     }
 
-    return { ok: true, status: response.status };
+    const draft = await createResponse.json() as { Id: string };
+    const draftId = draft.Id;
+
+    // Step 2: Add attachments
+    for (const attachment of options.attachments) {
+      const attachUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(draftId)}/attachments`;
+      const attachResponse = await fetch(attachUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': USER_AGENT,
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          '@odata.type': '#Microsoft.OutlookServices.FileAttachment',
+          Name: attachment.name,
+          ContentType: attachment.contentType,
+          ContentBytes: attachment.contentBytes,
+        }),
+      });
+
+      if (!attachResponse.ok) {
+        const errorText = await attachResponse.text();
+        return {
+          ok: false,
+          status: attachResponse.status,
+          error: {
+            code: `HTTP_${attachResponse.status}`,
+            message: `Failed to add attachment ${attachment.name}: ${errorText || attachResponse.statusText}`,
+          },
+        };
+      }
+    }
+
+    // Step 3: Send the draft
+    const sendUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(draftId)}/send`;
+    const sendResponse = await fetch(sendUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': USER_AGENT,
+      },
+    });
+
+    if (!sendResponse.ok) {
+      const errorText = await sendResponse.text();
+      return {
+        ok: false,
+        status: sendResponse.status,
+        error: {
+          code: `HTTP_${sendResponse.status}`,
+          message: errorText || sendResponse.statusText,
+        },
+      };
+    }
+
+    return { ok: true, status: sendResponse.status };
   } catch (err) {
     return {
       ok: false,
@@ -1672,6 +1856,64 @@ export async function replyToEmail(
     }
 
     return { ok: true, status: sendResponse.status };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: {
+        code: 'NETWORK_ERROR',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      },
+    };
+  }
+}
+
+/**
+ * Forward an email to one or more recipients.
+ */
+export async function forwardEmail(
+  token: string,
+  messageId: string,
+  toRecipients: string[],
+  comment?: string
+): Promise<OwaResponse<void>> {
+  const url = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(messageId)}/forward`;
+
+  try {
+    const body: Record<string, unknown> = {
+      ToRecipients: toRecipients.map(email => ({
+        EmailAddress: { Address: email },
+      })),
+    };
+
+    if (comment) {
+      body.Comment = comment;
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        ok: false,
+        status: response.status,
+        error: {
+          code: `HTTP_${response.status}`,
+          message: errorText || response.statusText,
+        },
+      };
+    }
+
+    return { ok: true, status: response.status };
   } catch (err) {
     return {
       ok: false,

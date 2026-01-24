@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { resolveAuth } from '../lib/auth.js';
-import { getEmails, getEmail, getAttachments, getAttachment, updateEmail, moveEmail, getMailFolders, replyToEmail } from '../lib/owa-client.js';
+import { getEmails, getEmail, getAttachments, getAttachment, updateEmail, moveEmail, getMailFolders, replyToEmail, forwardEmail } from '../lib/owa-client.js';
 import { markdownToHtml } from '../lib/markdown.js';
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -49,7 +49,9 @@ export const mailCommand = new Command('mail')
   .option('--to <folder>', 'Destination folder for move (inbox, archive, deleted, junk)')
   .option('--reply <index>', 'Reply to email at index')
   .option('--reply-all <index>', 'Reply all to email at index')
-  .option('--message <text>', 'Reply message text')
+  .option('--forward <index>', 'Forward email at index (use with --to-addr)')
+  .option('--to-addr <emails>', 'Forward recipients (comma-separated)')
+  .option('--message <text>', 'Reply/forward message text')
   .option('--markdown', 'Parse message as markdown (bold, links, lists)')
   .option('--json', 'Output as JSON')
   .option('--token <token>', 'Use a specific token')
@@ -72,6 +74,8 @@ export const mailCommand = new Command('mail')
     to?: string;
     reply?: string;
     replyAll?: string;
+    forward?: string;
+    toAddr?: string;
     message?: string;
     markdown?: boolean;
     json?: boolean;
@@ -449,6 +453,40 @@ export const mailCommand = new Command('mail')
 
       const replyType = isReplyAll ? 'Reply all' : 'Reply';
       console.log(`\u2713 ${replyType} sent to: ${email.Subject}`);
+      return;
+    }
+
+    // Handle forward
+    if (options.forward) {
+      const idx = parseInt(options.forward) - 1;
+      if (isNaN(idx) || idx < 0 || idx >= emails.length) {
+        console.error(`Invalid email number: ${options.forward}`);
+        console.error(`Valid range: 1-${emails.length}`);
+        process.exit(1);
+      }
+
+      if (!options.toAddr) {
+        console.error('Please provide forward recipients with --to-addr');
+        console.error('Example: clippy mail --forward 1 --to-addr "user@example.com"');
+        process.exit(1);
+      }
+
+      const email = emails[idx];
+      const recipients = options.toAddr.split(',').map(e => e.trim()).filter(Boolean);
+
+      const result = await forwardEmail(
+        authResult.token!,
+        email.Id,
+        recipients,
+        options.message
+      );
+
+      if (!result.ok) {
+        console.error(`Error: ${result.error?.message || 'Failed to forward email'}`);
+        process.exit(1);
+      }
+
+      console.log(`\u2713 Forwarded to ${recipients.join(', ')}: ${email.Subject}`);
       return;
     }
 

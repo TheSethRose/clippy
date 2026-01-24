@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { resolveAuth } from '../lib/auth.js';
-import { createEvent, getRooms, searchRooms, getScheduleViaOutlook } from '../lib/owa-client.js';
+import { createEvent, getRooms, searchRooms, getScheduleViaOutlook, Recurrence, RecurrencePattern, RecurrenceRange } from '../lib/owa-client.js';
 
 function formatTime(dateStr: string): string {
   const date = new Date(dateStr);
@@ -89,6 +89,11 @@ export const createEventCommand = new Command('create-event')
   .option('--teams', 'Create as Teams meeting')
   .option('--list-rooms', 'List available meeting rooms')
   .option('--find-room', 'Find an available room for the time slot')
+  .option('--repeat <type>', 'Recurrence: daily, weekly, monthly, yearly')
+  .option('--every <n>', 'Repeat every N days/weeks/months (default: 1)', '1')
+  .option('--days <days>', 'Days of week for weekly recurrence (mon,tue,wed,thu,fri,sat,sun)')
+  .option('--until <date>', 'End date for recurrence (YYYY-MM-DD)')
+  .option('--count <n>', 'Number of occurrences (alternative to --until)')
   .option('--json', 'Output as JSON')
   .option('--token <token>', 'Use a specific token')
   .option('-i, --interactive', 'Open browser to extract token automatically')
@@ -100,6 +105,11 @@ export const createEventCommand = new Command('create-event')
     teams?: boolean;
     listRooms?: boolean;
     findRoom?: boolean;
+    repeat?: string;
+    every?: string;
+    days?: string;
+    until?: string;
+    count?: string;
     json?: boolean;
     token?: string;
     interactive?: boolean;
@@ -244,6 +254,80 @@ export const createEventCommand = new Command('create-event')
       attendees.push({ email: roomEmail, name: roomName, type: 'Resource' });
     }
 
+    // Build recurrence if specified
+    let recurrence: Recurrence | undefined;
+    if (options.repeat) {
+      const dayMap: Record<string, string> = {
+        'mon': 'Monday', 'monday': 'Monday',
+        'tue': 'Tuesday', 'tuesday': 'Tuesday',
+        'wed': 'Wednesday', 'wednesday': 'Wednesday',
+        'thu': 'Thursday', 'thursday': 'Thursday',
+        'fri': 'Friday', 'friday': 'Friday',
+        'sat': 'Saturday', 'saturday': 'Saturday',
+        'sun': 'Sunday', 'sunday': 'Sunday',
+      };
+
+      const patternTypeMap: Record<string, RecurrencePattern['Type']> = {
+        'daily': 'Daily',
+        'weekly': 'Weekly',
+        'monthly': 'AbsoluteMonthly',
+        'yearly': 'AbsoluteYearly',
+      };
+
+      const patternType = patternTypeMap[options.repeat.toLowerCase()];
+      if (!patternType) {
+        console.error(`Invalid repeat type: ${options.repeat}`);
+        console.error('Valid options: daily, weekly, monthly, yearly');
+        process.exit(1);
+      }
+
+      const pattern: RecurrencePattern = {
+        Type: patternType,
+        Interval: parseInt(options.every || '1') || 1,
+      };
+
+      // For weekly recurrence, add days of week
+      if (patternType === 'Weekly') {
+        if (options.days) {
+          const days = options.days.split(',').map(d => dayMap[d.trim().toLowerCase()]).filter(Boolean);
+          if (days.length > 0) {
+            pattern.DaysOfWeek = days;
+          }
+        } else {
+          // Default to the day of the event
+          const dayOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][start.getDay()];
+          pattern.DaysOfWeek = [dayOfWeek];
+        }
+      }
+
+      // For monthly, use day of month
+      if (patternType === 'AbsoluteMonthly') {
+        pattern.DayOfMonth = start.getDate();
+      }
+
+      // For yearly, use month and day
+      if (patternType === 'AbsoluteYearly') {
+        pattern.Month = start.getMonth() + 1;
+        pattern.DayOfMonth = start.getDate();
+      }
+
+      // Build range
+      const range: RecurrenceRange = {
+        Type: 'NoEnd',
+        StartDate: start.toISOString().split('T')[0],
+      };
+
+      if (options.until) {
+        range.Type = 'EndDate';
+        range.EndDate = options.until;
+      } else if (options.count) {
+        range.Type = 'Numbered';
+        range.NumberOfOccurrences = parseInt(options.count);
+      }
+
+      recurrence = { Pattern: pattern, Range: range };
+    }
+
     // Create the event
     const result = await createEvent({
       token: authResult.token!,
@@ -254,6 +338,7 @@ export const createEventCommand = new Command('create-event')
       location: roomName,
       attendees: attendees.length > 0 ? attendees : undefined,
       isOnlineMeeting: options.teams,
+      recurrence,
     });
 
     if (!result.ok || !result.data) {
@@ -275,6 +360,15 @@ export const createEventCommand = new Command('create-event')
           end: result.data.End.DateTime,
           webLink: result.data.WebLink,
           onlineMeetingUrl: result.data.OnlineMeetingUrl,
+          recurring: !!recurrence,
+          recurrence: recurrence ? {
+            type: recurrence.Pattern.Type,
+            interval: recurrence.Pattern.Interval,
+            daysOfWeek: recurrence.Pattern.DaysOfWeek,
+            endType: recurrence.Range.Type,
+            endDate: recurrence.Range.EndDate,
+            occurrences: recurrence.Range.NumberOfOccurrences,
+          } : undefined,
         },
       }, null, 2));
       return;
@@ -301,6 +395,33 @@ export const createEventCommand = new Command('create-event')
 
     if (result.data.WebLink) {
       console.log(`  Link:  ${result.data.WebLink}`);
+    }
+
+    if (recurrence) {
+      let recurrenceDesc = `Every ${recurrence.Pattern.Interval > 1 ? recurrence.Pattern.Interval + ' ' : ''}`;
+      switch (recurrence.Pattern.Type) {
+        case 'Daily':
+          recurrenceDesc += recurrence.Pattern.Interval > 1 ? 'days' : 'day';
+          break;
+        case 'Weekly':
+          recurrenceDesc += recurrence.Pattern.Interval > 1 ? 'weeks' : 'week';
+          if (recurrence.Pattern.DaysOfWeek) {
+            recurrenceDesc += ` on ${recurrence.Pattern.DaysOfWeek.join(', ')}`;
+          }
+          break;
+        case 'AbsoluteMonthly':
+          recurrenceDesc += recurrence.Pattern.Interval > 1 ? 'months' : 'month';
+          break;
+        case 'AbsoluteYearly':
+          recurrenceDesc += recurrence.Pattern.Interval > 1 ? 'years' : 'year';
+          break;
+      }
+      if (recurrence.Range.Type === 'EndDate' && recurrence.Range.EndDate) {
+        recurrenceDesc += ` until ${recurrence.Range.EndDate}`;
+      } else if (recurrence.Range.Type === 'Numbered' && recurrence.Range.NumberOfOccurrences) {
+        recurrenceDesc += ` (${recurrence.Range.NumberOfOccurrences} occurrences)`;
+      }
+      console.log(`  Repeat: ${recurrenceDesc}`);
     }
 
     console.log();

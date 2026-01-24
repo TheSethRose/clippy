@@ -1,7 +1,10 @@
 import { Command } from 'commander';
 import { resolveAuth } from '../lib/auth.js';
-import { sendEmail } from '../lib/owa-client.js';
+import { sendEmail, EmailAttachment } from '../lib/owa-client.js';
 import { markdownToHtml } from '../lib/markdown.js';
+import { readFile, stat } from 'fs/promises';
+import { basename } from 'path';
+import { lookup } from 'mime-types';
 
 export const sendCommand = new Command('send')
   .description('Send an email')
@@ -10,6 +13,7 @@ export const sendCommand = new Command('send')
   .requiredOption('--body <text>', 'Email body')
   .option('--cc <emails>', 'CC recipient(s), comma-separated')
   .option('--bcc <emails>', 'BCC recipient(s), comma-separated')
+  .option('--attach <files>', 'Attach file(s), comma-separated paths')
   .option('--html', 'Send body as HTML')
   .option('--markdown', 'Parse body as markdown (bold, links, lists)')
   .option('--json', 'Output as JSON')
@@ -21,6 +25,7 @@ export const sendCommand = new Command('send')
     body: string;
     cc?: string;
     bcc?: string;
+    attach?: string;
     html?: boolean;
     markdown?: boolean;
     json?: boolean;
@@ -61,6 +66,49 @@ export const sendCommand = new Command('send')
       bodyType = 'HTML';
     }
 
+    // Process attachments
+    let attachments: EmailAttachment[] | undefined;
+    if (options.attach) {
+      const filePaths = options.attach.split(',').map(f => f.trim()).filter(Boolean);
+      attachments = [];
+
+      for (const filePath of filePaths) {
+        try {
+          // Check file exists and get info
+          const fileStat = await stat(filePath);
+          if (!fileStat.isFile()) {
+            console.error(`Not a file: ${filePath}`);
+            process.exit(1);
+          }
+
+          // Warn if file is large (>25MB is typically the email limit)
+          if (fileStat.size > 25 * 1024 * 1024) {
+            console.error(`File too large (>${25}MB): ${filePath}`);
+            process.exit(1);
+          }
+
+          // Read file and convert to base64
+          const content = await readFile(filePath);
+          const fileName = basename(filePath);
+          const contentType = lookup(filePath) || 'application/octet-stream';
+
+          attachments.push({
+            name: fileName,
+            contentType,
+            contentBytes: content.toString('base64'),
+          });
+
+          if (!options.json) {
+            console.log(`  Attaching: ${fileName} (${Math.round(fileStat.size / 1024)} KB)`);
+          }
+        } catch (err) {
+          console.error(`Failed to read attachment: ${filePath}`);
+          console.error(err instanceof Error ? err.message : 'Unknown error');
+          process.exit(1);
+        }
+      }
+    }
+
     const result = await sendEmail(authResult.token!, {
       to: toList,
       cc: ccList,
@@ -68,6 +116,7 @@ export const sendCommand = new Command('send')
       subject: options.subject,
       body,
       bodyType,
+      attachments,
     });
 
     if (!result.ok) {
@@ -80,9 +129,18 @@ export const sendCommand = new Command('send')
     }
 
     if (options.json) {
-      console.log(JSON.stringify({ success: true, to: toList, subject: options.subject }, null, 2));
+      console.log(JSON.stringify({
+        success: true,
+        to: toList,
+        subject: options.subject,
+        attachments: attachments?.map(a => a.name),
+      }, null, 2));
     } else {
       console.log(`\n\u2713 Email sent to ${toList.join(', ')}`);
-      console.log(`  Subject: ${options.subject}\n`);
+      console.log(`  Subject: ${options.subject}`);
+      if (attachments && attachments.length > 0) {
+        console.log(`  Attachments: ${attachments.length}`);
+      }
+      console.log();
     }
   });
