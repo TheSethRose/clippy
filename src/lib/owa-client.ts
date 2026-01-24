@@ -1721,17 +1721,16 @@ export async function sendEmail(
 }
 
 /**
- * Reply to an email.
+ * Create or send a reply to an email.
  * Always uses draft approach for proper control over formatting and quote separation.
  */
-export async function replyToEmail(
+async function createReplyDraft(
   token: string,
   messageId: string,
   comment: string,
   replyAll: boolean = false,
   isHtml: boolean = false
-): Promise<OwaResponse<void>> {
-  // Always use the draft approach for proper control over formatting
+): Promise<OwaResponse<{ draftId: string }>> {
   const createAction = replyAll ? 'createreplyall' : 'createreply';
   const createUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(messageId)}/${createAction}`;
 
@@ -1788,7 +1787,11 @@ export async function replyToEmail(
     let combinedBody: string;
     const replyDiv = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.5; margin-bottom: 20px;">${replyContent}</div>`;
 
-    if (quotedOriginal.includes('divRplyFwdMsg')) {
+    if (quotedOriginal.includes('________________________________')) {
+      // Outlook inserts a separator line before the quoted thread; remove it so reply stays on top
+      const cleaned = quotedOriginal.replace(/_{10,}\s*/m, '');
+      combinedBody = `${replyDiv}${cleaned}`;
+    } else if (quotedOriginal.includes('divRplyFwdMsg')) {
       // Insert our content before the reply/forward message div
       combinedBody = quotedOriginal.replace(
         /(<div[^>]*id=["']?divRplyFwdMsg["']?)/i,
@@ -1833,8 +1836,47 @@ export async function replyToEmail(
       };
     }
 
-    // Step 3: Send the draft
-    const sendUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(draftId)}/send`;
+    return { ok: true, status: updateResponse.status, data: { draftId } };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: {
+        code: 'NETWORK_ERROR',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      },
+    };
+  }
+}
+
+export async function replyToEmailDraft(
+  token: string,
+  messageId: string,
+  comment: string,
+  replyAll: boolean = false,
+  isHtml: boolean = false
+): Promise<OwaResponse<{ draftId: string }>> {
+  return createReplyDraft(token, messageId, comment, replyAll, isHtml);
+}
+
+export async function replyToEmail(
+  token: string,
+  messageId: string,
+  comment: string,
+  replyAll: boolean = false,
+  isHtml: boolean = false
+): Promise<OwaResponse<void>> {
+  const draftResult = await createReplyDraft(token, messageId, comment, replyAll, isHtml);
+
+  if (!draftResult.ok || !draftResult.data) {
+    return draftResult as OwaResponse<void>;
+  }
+
+  const draftId = draftResult.data.draftId;
+
+  // Send the draft
+  const sendUrl = `https://outlook.office.com/api/v2.0/me/messages/${encodeURIComponent(draftId)}/send`;
+  try {
     const sendResponse = await fetch(sendUrl, {
       method: 'POST',
       headers: {

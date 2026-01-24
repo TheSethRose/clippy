@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { resolveAuth } from '../lib/auth.js';
-import { getEmails, getEmail, getAttachments, getAttachment, updateEmail, moveEmail, getMailFolders, replyToEmail, forwardEmail } from '../lib/owa-client.js';
+import { getEmails, getEmail, getAttachments, getAttachment, updateEmail, moveEmail, getMailFolders, replyToEmail, replyToEmailDraft, forwardEmail } from '../lib/owa-client.js';
 import { markdownToHtml } from '../lib/markdown.js';
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -49,6 +49,7 @@ export const mailCommand = new Command('mail')
   .option('--to <folder>', 'Destination folder for move (inbox, archive, deleted, junk)')
   .option('--reply <id>', 'Reply to email by ID')
   .option('--reply-all <id>', 'Reply all to email by ID')
+  .option('--draft', 'Create a reply draft (do not send)')
   .option('--forward <id>', 'Forward email by ID (use with --to-addr)')
   .option('--to-addr <emails>', 'Forward recipients (comma-separated)')
   .option('--message <text>', 'Reply/forward message text')
@@ -81,6 +82,7 @@ export const mailCommand = new Command('mail')
     json?: boolean;
     token?: string;
     interactive?: boolean;
+    draft?: boolean;
   }) => {
     const authResult = await resolveAuth({
       token: options.token,
@@ -397,6 +399,25 @@ export const mailCommand = new Command('mail')
       if (options.markdown) {
         message = markdownToHtml(options.message);
         isHtml = true;
+      }
+
+      if (options.draft) {
+        const result = await replyToEmailDraft(
+          authResult.token!,
+          id,
+          message,
+          isReplyAll,
+          isHtml
+        );
+
+        if (!result.ok || !result.data) {
+          console.error(`Error: ${result.error?.message || 'Failed to create reply draft'}`);
+          process.exit(1);
+        }
+
+        const replyType = isReplyAll ? 'Reply all' : 'Reply';
+        console.log(`\u2713 ${replyType} draft created: ${result.data.draftId}`);
+        return;
       }
 
       const result = await replyToEmail(
