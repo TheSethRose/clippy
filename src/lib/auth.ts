@@ -211,7 +211,7 @@ export async function extractTokenViaPlaywright(
   // If headless failed and we haven't tried visible yet, retry with visible browser
   if (headless && fallbackToVisible) {
     console.log('Session not found. Opening browser for login...');
-    return tryExtractToken(false, 60000, userDataDir); // Give more time for manual login
+    return tryExtractToken(false, 300000, userDataDir); // 5 minutes for manual login
   }
 
   return result;
