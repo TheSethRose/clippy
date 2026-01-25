@@ -217,6 +217,11 @@ export async function extractTokenViaPlaywright(
   return result;
 }
 
+// Path to storage state file (cookies + localStorage as JSON)
+function getStorageStatePath(): string {
+  return join(homedir(), '.config', 'clippy', 'storage-state.json');
+}
+
 async function tryExtractToken(
   headless: boolean,
   timeout: number,
@@ -242,15 +247,24 @@ async function tryExtractToken(
     // Clean up stale Chrome lock if previous process crashed
     await cleanStaleChromeProfile(userDataDir);
 
-    // Launch persistent context - session will be remembered
+    // Check if we have saved storage state (cookies as JSON - bypasses Chrome encryption)
+    const storageStatePath = getStorageStatePath();
+    let storageState: string | undefined;
+    try {
+      await readFile(storageStatePath);
+      storageState = storageStatePath;
+    } catch {
+      // No storage state file yet
+    }
+
+    // Launch persistent context with storage state if available
     context = await chromium.launchPersistentContext(userDataDir, {
       headless,
       channel: 'chrome',
       args: [
         '--disable-blink-features=AutomationControlled',
-        '--password-store=basic',  // Use basic store instead of mock keychain
       ],
-      ignoreDefaultArgs: ['--use-mock-keychain'],  // Don't use mock keychain
+      storageState,  // Load saved cookies if available
     });
 
     const page = context.pages()[0] || await context.newPage();
@@ -304,6 +318,16 @@ async function tryExtractToken(
       }
     }
 
+    // Save storage state (cookies as JSON) to persist session across restarts
+    // This bypasses Chrome's cookie encryption which doesn't work with Playwright's mock keychain
+    if (capturedToken) {
+      try {
+        await context.storageState({ path: getStorageStatePath() });
+      } catch {
+        // Non-fatal: continue even if storage state save fails
+      }
+    }
+
     await context.close();
     await lock.release();
 
@@ -344,14 +368,23 @@ export async function startKeepaliveSession(options: { intervalMinutes: number; 
   // Clean up stale Chrome lock if previous process crashed
   await cleanStaleChromeProfile(userDataDir);
 
+  // Check if we have saved storage state (cookies as JSON)
+  const storageStatePath = getStorageStatePath();
+  let storageState: string | undefined;
+  try {
+    await readFile(storageStatePath);
+    storageState = storageStatePath;
+  } catch {
+    // No storage state file yet
+  }
+
   const context = await chromium.launchPersistentContext(userDataDir, {
     headless,
     channel: 'chrome',
     args: [
       '--disable-blink-features=AutomationControlled',
-      '--password-store=basic',  // Use basic store instead of mock keychain
     ],
-    ignoreDefaultArgs: ['--use-mock-keychain'],  // Don't use mock keychain
+    storageState,  // Load saved cookies if available
   });
 
   const page = context.pages()[0] || await context.newPage();
@@ -392,6 +425,8 @@ export async function startKeepaliveSession(options: { intervalMinutes: number; 
       await setCachedToken(lastToken, lastGraphToken || undefined);
       // Write health file for external monitoring
       await writeFile(healthFile, new Date().toISOString(), 'utf-8').catch(() => {});
+      // Save storage state (cookies as JSON) to persist session
+      await context.storageState({ path: getStorageStatePath() }).catch(() => {});
     }
 
     await sleep(intervalMinutes * 60 * 1000);
