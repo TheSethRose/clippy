@@ -236,38 +236,34 @@ async function tryExtractToken(
     };
   }
 
+  let browser;
   let context;
   try {
-    // Use the shared profile directory (persists login session)
-    const userDataDir = userDataDirOverride || getProfileDir();
-
-    // Ensure the directory exists
-    await mkdir(userDataDir, { recursive: true });
-
-    // Clean up stale Chrome lock if previous process crashed
-    await cleanStaleChromeProfile(userDataDir);
-
-    // Check if we have saved storage state (cookies as JSON - bypasses Chrome encryption)
+    // Check if we have saved storage state (cookies as JSON)
     const storageStatePath = getStorageStatePath();
-    let storageState: string | undefined;
+    let hasStorageState = false;
     try {
       await readFile(storageStatePath);
-      storageState = storageStatePath;
+      hasStorageState = true;
     } catch {
       // No storage state file yet
     }
 
-    // Launch persistent context with storage state if available
-    context = await chromium.launchPersistentContext(userDataDir, {
+    // Launch regular browser (not persistent context - storageState works better this way)
+    browser = await chromium.launch({
       headless,
       channel: 'chrome',
       args: [
         '--disable-blink-features=AutomationControlled',
       ],
-      storageState,  // Load saved cookies if available
     });
 
-    const page = context.pages()[0] || await context.newPage();
+    // Create context with storage state if available
+    context = await browser.newContext(
+      hasStorageState ? { storageState: storageStatePath } : undefined
+    );
+
+    const page = await context.newPage();
 
     let capturedToken: string | null = null;
     let capturedGraphToken: string | null = null;
@@ -328,7 +324,7 @@ async function tryExtractToken(
       }
     }
 
-    await context.close();
+    await browser.close();
     await lock.release();
 
     if (capturedToken) {
@@ -342,8 +338,8 @@ async function tryExtractToken(
         : 'Timeout: No Bearer token captured. Make sure you completed the login.'
     };
   } catch (err) {
-    if (context) {
-      await context.close();
+    if (browser) {
+      await browser.close();
     }
     await lock.release();
     return {
@@ -361,33 +357,31 @@ export function getProfileDir(): string {
 export async function startKeepaliveSession(options: { intervalMinutes: number; headless?: boolean }): Promise<void> {
   const { intervalMinutes, headless = false } = options;
 
-  // Use the shared profile directory (same as login/refresh)
-  const userDataDir = getProfileDir();
-  await mkdir(userDataDir, { recursive: true });
-
-  // Clean up stale Chrome lock if previous process crashed
-  await cleanStaleChromeProfile(userDataDir);
-
   // Check if we have saved storage state (cookies as JSON)
   const storageStatePath = getStorageStatePath();
-  let storageState: string | undefined;
+  let hasStorageState = false;
   try {
     await readFile(storageStatePath);
-    storageState = storageStatePath;
+    hasStorageState = true;
   } catch {
     // No storage state file yet
   }
 
-  const context = await chromium.launchPersistentContext(userDataDir, {
+  // Launch regular browser (not persistent context - storageState works better this way)
+  const browser = await chromium.launch({
     headless,
     channel: 'chrome',
     args: [
       '--disable-blink-features=AutomationControlled',
     ],
-    storageState,  // Load saved cookies if available
   });
 
-  const page = context.pages()[0] || await context.newPage();
+  // Create context with storage state if available
+  const context = await browser.newContext(
+    hasStorageState ? { storageState: storageStatePath } : undefined
+  );
+
+  const page = await context.newPage();
 
   let lastToken: string | null = null;
   let lastGraphToken: string | null = null;
