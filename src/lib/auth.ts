@@ -160,6 +160,7 @@ export interface AuthResult {
   success: boolean;
   token?: string;
   graphToken?: string;
+  refreshToken?: string;
   error?: string;
 }
 
@@ -167,12 +168,14 @@ export interface PlaywrightTokenResult {
   success: boolean;
   token?: string;
   graphToken?: string;
+  refreshToken?: string;
   error?: string;
 }
 
 interface CachedToken {
   token: string;
   graphToken?: string;
+  refreshToken?: string;
   expiresAt: number;
 }
 
@@ -196,8 +199,33 @@ async function getCachedToken(): Promise<{ cached: CachedToken; needsRefresh: bo
     const cached = JSON.parse(data) as CachedToken;
     const now = Date.now();
 
+    // If token is expired but we have a refresh token, try to refresh
     if (cached.expiresAt <= now) {
-      return null; // Expired
+      if (cached.refreshToken) {
+        console.log('[getCachedToken] Access token expired, attempting refresh...');
+        const refreshResult = await refreshAccessToken(cached.refreshToken);
+        
+        if (refreshResult.success && refreshResult.accessToken) {
+          // Save the new tokens
+          const newRefreshToken = refreshResult.refreshToken || cached.refreshToken;
+          await setCachedToken(refreshResult.accessToken, cached.graphToken, newRefreshToken);
+          
+          // Return the refreshed token
+          const newExpiry = getJwtExpiration(refreshResult.accessToken) || (Date.now() + 55 * 60 * 1000);
+          return {
+            cached: {
+              token: refreshResult.accessToken,
+              graphToken: cached.graphToken,
+              refreshToken: newRefreshToken,
+              expiresAt: newExpiry,
+            },
+            needsRefresh: false,
+          };
+        } else {
+          console.error('[getCachedToken] Refresh failed:', refreshResult.error);
+        }
+      }
+      return null; // Expired and couldn't refresh
     }
 
     // Check if we need to refresh soon
@@ -209,7 +237,76 @@ async function getCachedToken(): Promise<{ cached: CachedToken; needsRefresh: bo
   return null;
 }
 
-export async function setCachedToken(token: string, graphToken?: string): Promise<void> {
+// Microsoft's first-party Outlook Web App client ID
+const OUTLOOK_CLIENT_ID = '9199bf20-a13f-4107-85dc-02114787ef48';
+
+/**
+ * Use a refresh token to get a new access token without browser.
+ * This uses Microsoft's first-party Outlook client ID.
+ */
+export async function refreshAccessToken(refreshToken: string): Promise<{
+  success: boolean;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  error?: string;
+}> {
+  try {
+    console.log('[refreshAccessToken] Attempting token refresh via OAuth...');
+    
+    const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': 'https://outlook.office.com', // Required for SPA tokens
+      },
+      body: new URLSearchParams({
+        client_id: OUTLOOK_CLIENT_ID,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        scope: 'https://outlook.office.com/.default offline_access',
+      }).toString(),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[refreshAccessToken] Failed:', response.status, errorText);
+      return {
+        success: false,
+        error: `Token refresh failed: ${response.status} - ${errorText}`,
+      };
+    }
+
+    const json = await response.json() as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+
+    if (json.access_token) {
+      console.log('[refreshAccessToken] ✅ Got new access token via refresh!');
+      return {
+        success: true,
+        accessToken: json.access_token,
+        refreshToken: json.refresh_token, // Microsoft may rotate refresh tokens
+        expiresIn: json.expires_in,
+      };
+    }
+
+    return {
+      success: false,
+      error: 'No access token in response',
+    };
+  } catch (err) {
+    console.error('[refreshAccessToken] Exception:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
+}
+
+export async function setCachedToken(token: string, graphToken?: string, refreshToken?: string): Promise<void> {
   try {
     const cacheDir = join(homedir(), '.config', 'clippy');
     await mkdir(cacheDir, { recursive: true });
@@ -217,12 +314,29 @@ export async function setCachedToken(token: string, graphToken?: string): Promis
     // Use actual JWT expiration time
     const expiresAt = getJwtExpiration(token) || (Date.now() + 55 * 60 * 1000);
 
+    // Preserve existing refresh token if not provided
+    let existingRefreshToken: string | undefined;
+    if (!refreshToken) {
+      try {
+        const existing = await readFile(TOKEN_CACHE_FILE, 'utf-8');
+        const parsed = JSON.parse(existing) as CachedToken;
+        existingRefreshToken = parsed.refreshToken;
+      } catch {
+        // No existing cache
+      }
+    }
+
     const cached: CachedToken = {
       token,
       graphToken,
+      refreshToken: refreshToken || existingRefreshToken,
       expiresAt,
     };
-    await writeFile(TOKEN_CACHE_FILE, JSON.stringify(cached), 'utf-8');
+    await writeFile(TOKEN_CACHE_FILE, JSON.stringify(cached, null, 2), 'utf-8');
+    
+    if (refreshToken) {
+      console.log('[setCachedToken] Refresh token saved!');
+    }
   } catch {
     // Ignore cache write errors
   }
@@ -327,6 +441,45 @@ async function tryExtractToken(
 
     let capturedToken: string | null = null;
     let capturedGraphToken: string | null = null;
+    let capturedRefreshToken: string | null = null;
+
+    // Intercept OAuth token endpoint responses to capture refresh tokens
+    page.on('response', async response => {
+      const url = response.url();
+      
+      // Log all Microsoft auth-related responses for debugging
+      if (url.includes('microsoftonline.com') || url.includes('login.microsoft')) {
+        console.log(`[tryExtract] Auth response: ${response.status()} ${url.substring(0, 100)}...`);
+      }
+      
+      // Capture refresh token from OAuth token endpoint
+      if (url.includes('login.microsoftonline.com') && url.includes('/oauth2/') && url.includes('/token')) {
+        console.log('[tryExtract] 🔑 Token endpoint response detected!');
+        try {
+          const text = await response.text();
+          console.log('[tryExtract] Token response length:', text.length);
+          const json = JSON.parse(text);
+          if (json.refresh_token && !capturedRefreshToken) {
+            capturedRefreshToken = json.refresh_token;
+            console.log('[tryExtract] 🎉 Captured refresh token from OAuth response!');
+            
+            // Save immediately so we don't lose it if something hangs later
+            if (json.access_token) {
+              console.log('[tryExtract] Saving tokens immediately...');
+              setCachedToken(json.access_token, undefined, json.refresh_token)
+                .then(() => console.log('[tryExtract] Tokens saved to disk!'))
+                .catch(err => console.log('[tryExtract] Token save error:', err));
+            }
+          }
+          if (json.access_token && !capturedToken) {
+            capturedToken = json.access_token;
+            console.log('[tryExtract] Captured access token from OAuth response');
+          }
+        } catch (err) {
+          console.log('[tryExtract] Token response parse error:', err);
+        }
+      }
+    });
 
     // Intercept requests to capture Bearer tokens
     page.on('request', request => {
@@ -386,18 +539,33 @@ async function tryExtractToken(
     // Save storage state (cookies as JSON) to persist session across restarts
     // This bypasses Chrome's cookie encryption which doesn't work with Playwright's mock keychain
     if (capturedToken) {
+      console.log('[tryExtract] Saving storage state...');
       try {
-        await context.storageState({ path: getStorageStatePath() });
-      } catch {
+        await Promise.race([
+          context.storageState({ path: getStorageStatePath() }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Storage state timeout')), 10000))
+        ]);
+        console.log('[tryExtract] Storage state saved');
+      } catch (err) {
+        console.log('[tryExtract] Storage state save failed:', err);
         // Non-fatal: continue even if storage state save fails
       }
     }
 
-    await browser.close();
+    console.log('[tryExtract] Closing browser...');
+    try {
+      await Promise.race([
+        browser.close(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Browser close timeout')), 10000))
+      ]);
+    } catch (err) {
+      console.log('[tryExtract] Browser close issue:', err);
+    }
     await lock.release();
+    console.log('[tryExtract] Done, returning result');
 
     if (capturedToken) {
-      return { success: true, token: capturedToken, graphToken: capturedGraphToken || undefined };
+      return { success: true, token: capturedToken, graphToken: capturedGraphToken || undefined, refreshToken: capturedRefreshToken || undefined };
     }
 
     return {
@@ -713,12 +881,13 @@ export async function resolveAuth(options: {
     if (playwrightResult.success && playwrightResult.token) {
       const isValid = await validateSession(playwrightResult.token);
       if (isValid) {
-        // Cache the token for future use
-        await setCachedToken(playwrightResult.token, playwrightResult.graphToken);
+        // Cache the token for future use (including refresh token if captured)
+        await setCachedToken(playwrightResult.token, playwrightResult.graphToken, playwrightResult.refreshToken);
         return {
           success: true,
           token: playwrightResult.token,
           graphToken: playwrightResult.graphToken,
+          refreshToken: playwrightResult.refreshToken,
         };
       }
       return {
