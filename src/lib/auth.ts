@@ -385,6 +385,8 @@ export async function startKeepaliveSession(options: { intervalMinutes: number; 
 
   let lastToken: string | null = null;
   let lastGraphToken: string | null = null;
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 3;
 
   page.on('request', request => {
     const url = request.url();
@@ -416,14 +418,43 @@ export async function startKeepaliveSession(options: { intervalMinutes: number; 
     await sleep(2000);
 
     if (lastToken) {
-      await setCachedToken(lastToken, lastGraphToken || undefined);
-      // Write health file for external monitoring
-      await writeFile(healthFile, new Date().toISOString(), 'utf-8').catch(() => {});
-      // Save storage state (cookies as JSON) to persist session
-      await context.storageState({ path: getStorageStatePath() }).catch(() => {});
+      // Validate the token before caching it
+      const isValid = await validateSession(lastToken);
+      
+      if (isValid) {
+        await setCachedToken(lastToken, lastGraphToken || undefined);
+        // Write health file for external monitoring
+        await writeFile(healthFile, new Date().toISOString(), 'utf-8').catch(() => {});
+        // Save storage state (cookies as JSON) to persist session
+        await context.storageState({ path: getStorageStatePath() }).catch(() => {});
+        consecutiveFailures = 0; // Reset on success
+        console.log(`[${new Date().toISOString()}] Token validated and cached successfully`);
+      } else {
+        consecutiveFailures++;
+        console.error(`[${new Date().toISOString()}] Token validation failed (attempt ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES})`);
+        
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          console.error(`[${new Date().toISOString()}] Too many consecutive failures, exiting for launchd restart...`);
+          await browser.close();
+          process.exit(1);
+        }
+      }
+    } else {
+      consecutiveFailures++;
+      console.error(`[${new Date().toISOString()}] No token captured (attempt ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES})`);
+      
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        console.error(`[${new Date().toISOString()}] Too many consecutive failures, exiting for launchd restart...`);
+        await browser.close();
+        process.exit(1);
+      }
     }
 
     await sleep(intervalMinutes * 60 * 1000);
+
+    // Reset tokens before reload to capture fresh ones
+    lastToken = null;
+    lastGraphToken = null;
 
     try {
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
