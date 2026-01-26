@@ -22,7 +22,7 @@ clippy <command>
 
 ## Authentication
 
-Clippy uses browser-based authentication to obtain an access token from Outlook.
+Clippy uses browser-based authentication to obtain tokens from Outlook. During login, it captures both an access token (short-lived, ~1 hour) and a refresh token (long-lived, days/weeks).
 
 ```bash
 # First time setup - opens browser for login
@@ -35,20 +35,39 @@ clippy whoami
 clippy refresh
 ```
 
-### Background Token Refresh
+### How Token Refresh Works
+
+1. **Initial login**: Browser opens, you sign in, Clippy captures both access and refresh tokens
+2. **Access token expires**: Clippy automatically uses the refresh token to get a new access token via API (no browser needed)
+3. **Refresh token rotates**: Microsoft issues a new refresh token with each refresh, keeping the chain alive
+
+This is more reliable than session cookies, which Microsoft can invalidate server-side at any time.
+
+### Background Session Keepalive
 
 To keep your session alive indefinitely:
 
 ```bash
-# Install as macOS background service
-clippy refresh --install
+# Start keepalive (keeps browser session warm)
+clippy keepalive
 
-# Check service status
-clippy refresh --status
-
-# Uninstall service
-clippy refresh --uninstall
+# Or install as macOS LaunchAgent (recommended)
+# Create ~/Library/LaunchAgents/com.clippy.keepalive.plist
 ```
+
+The keepalive:
+- Refreshes the browser session every 10 minutes
+- Validates tokens against Microsoft's servers
+- Sets a `needs-login` marker if session expires (prevents browser spam)
+- After manual re-login, automatically resumes
+
+### Token Storage
+
+Tokens are stored in `~/.config/clippy/`:
+- `token-cache.json` - Access token, refresh token, expiry
+- `storage-state.json` - Browser cookies/session
+- `needs-login` - Marker file when re-auth is required
+- `keepalive-health.txt` - Last successful keepalive timestamp
 
 ---
 
