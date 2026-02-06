@@ -32,6 +32,7 @@ cp .env.example .env
 |---|---|---|---|
 | `CLIPPY_CLOUD` | `commercial`, `gcc` | `commercial` | Microsoft cloud environment |
 | `CLIPPY_TOKEN` | Bearer token string | — | Skip browser login with a token directly |
+| `CLIPPY_READONLY` | `true`, `false` | `false` | Disable write actions (send/respond/create/delete) |
 
 ### Cloud Environments
 
@@ -43,6 +44,21 @@ You can also pass `--gcc` on any command instead of using the `.env` file:
 ```bash
 clippy --gcc login --interactive
 clippy --gcc calendar
+```
+
+### Read-only Mode
+
+To block any write actions (sending email, responding to invites, creating/updating/deleting items), enable read-only mode:
+
+```bash
+export CLIPPY_READONLY=true
+clippy mail --unread
+```
+
+Or pass the flag per command:
+
+```bash
+clippy --read-only mail --unread
 ```
 
 ---
@@ -385,6 +401,7 @@ All commands support:
 
 ```bash
 --gcc               # Use Office 365 US Government (GCC) endpoints
+--read-only         # Disable write actions (send/respond/create/delete)
 --json              # Output as JSON (for scripting)
 --token <token>     # Use a specific token
 -i, --interactive   # Force interactive browser login

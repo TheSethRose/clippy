@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
 export {};
 
-// Pre-parse --gcc flag before modules load (endpoints.ts reads env at import time)
+// Pre-parse flags before modules load (endpoints.ts reads env at import time)
 if (process.argv.includes('--gcc')) {
   process.env.CLIPPY_CLOUD = 'gcc';
+}
+if (process.argv.includes('--read-only')) {
+  process.env.CLIPPY_READONLY = 'true';
 }
 
 const { Command } = await import('commander');
@@ -30,7 +33,8 @@ program
   .name('clippy')
   .description('CLI for Microsoft 365/OWA')
   .version('0.1.0')
-  .option('--gcc', 'Use Office 365 US Government (GCC) endpoints');
+  .option('--gcc', 'Use Office 365 US Government (GCC) endpoints')
+  .option('--read-only', 'Disable write commands');
 
 program.addCommand(loginCommand);
 program.addCommand(whoamiCommand);

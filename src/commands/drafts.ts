@@ -6,6 +6,7 @@ import { readFile, stat } from 'fs/promises';
 import { basename } from 'path';
 import { lookup } from 'mime-types';
 import { OUTLOOK_API } from '../lib/endpoints.js';
+import { assertReadWriteAllowed } from '../lib/readonly.js';
 
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -338,6 +339,11 @@ export const draftsCommand = new Command('drafts')
     token?: string;
     interactive?: boolean;
   }) => {
+    const hasWriteAction = !!(options.create || options.edit || options.send || options.delete);
+    if (hasWriteAction) {
+      assertReadWriteAllowed('Draft write actions');
+    }
+
     const authResult = await resolveAuth({
       token: options.token,
       interactive: options.interactive,

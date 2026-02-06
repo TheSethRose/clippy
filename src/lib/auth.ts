@@ -879,9 +879,11 @@ export async function resolveAuth(options: {
 
   // Priority 4: Interactive Playwright extraction
   if (interactive) {
+    const explicitVisible = headless === false;
     const playwrightResult = await extractTokenViaPlaywright({
       headless: headless !== undefined ? headless : true,
-      fallbackToVisible: headless !== false,
+      fallbackToVisible: !explicitVisible,
+      timeout: explicitVisible ? 120000 : undefined,
     });
     if (playwrightResult.success && playwrightResult.token) {
       const isValid = await validateSession(playwrightResult.token);
